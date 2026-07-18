@@ -1,0 +1,18 @@
+{
+    "type": "record",
+    "name": "AccountProfile",
+    "namespace": "com.diecocan.portfolio.fraud.avro",
+    "doc": "Rolling account statistics for anomaly detection",
+    "fields": [
+        {"name": "accountId", "type": "string", "doc": "Account identifier"},
+        {"name": "txnCount", "type": "long", "doc": "Total transactions for this account"},
+        {"name": "totalAmount", "type": "double", "doc": "Sum of all transaction amounts"},
+        {"name": "avgAmount", "type": "double", "doc": "Average transaction amount {totalAmount / txnAmount}"},
+        {"name": "stddev", "type": "double", "doc": "Standard deviation of transaction amounts"},
+        {"name": "lastUpdated", "type": {"type": "long", "logicalType": "timestamp-millis"}, "doc": "When this profile was last updated"},
+        {"name": "lastCity", "type": ["null", "string"], "default": null, "doc": "City of the most recent transaction"},
+        {"name": "lastCountry", "type": ["null", "string"], "default": null, "doc": "Country of the most recent transaction"},
+        {"name": "lastTransactionTimestamp", "type": ["null", {"type": "long", "logicalType": "timestamp-millis"}], "default": null, "doc": "Timestamp of the most recent transaction"},
+        {"name": "sumSquaredDiff", "type": "double", "doc": "Welford's algorithm: running sum of squared differences from the mean, used to compute stddev incrementally"}
+    ]
+}

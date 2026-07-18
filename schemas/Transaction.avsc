@@ -1,0 +1,16 @@
+{
+    "type": "record",
+    "name": "Transaction",
+    "namespace": "com.diecocan.portfolio.fraud.avro",
+    "doc": "A single bank transaction event",
+    "fields": [
+        {"name": "transactionId", "type": "string", "doc": "unique transaction identifier (UUID)"},
+        {"name": "accountId", "type": "string", "doc": "Account performing the transaction"},
+        {"name": "amount", "type": "double", "doc": "Transaction amount in base currency"},
+        {"name": "currency", "type": "string", "doc": "ISO 4217 currency code (e.g., USD)" },
+        {"name": "merchant", "type": "string", "doc": "Merchant name"},
+        {"name": "city", "type": "string", "doc": "Transaction city"},
+        {"name": "country", "type": "string", "doc": "Transaction country (ISO 2-letter code)"},
+        {"name": "timestamp", "type": {"type": "long", "logicalType": "timestamp-millis"}, "doc": "When the transaction occurred"}
+    ]
+}

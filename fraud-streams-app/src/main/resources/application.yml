@@ -1,0 +1,22 @@
+spring:
+    main:
+        web-application-type: none
+    kafka:
+        bootstrap-servers: localhost:9092
+        streams:
+            application-id: fraud-streams-app
+            properties:
+                schema.registry.url: http://localhost:8081
+                default.key.serde: org.apache.kafka.common.serialization.Serdes$StringSerde
+                default.value.serde: io.confluent.kafka.streams.serdes.avro.SpecificAvroSerde
+                specific.avro.reader: true
+                state.dir: /tmp/kafka-streams-fraud-app
+
+fraud-streams-app:
+    velocity:
+        threshold: 5
+        window-minutes: 2
+    amount-anomaly:
+        z-score-threshold: 3.0
+    impossible-geo:
+        max-travel-minutes: 60

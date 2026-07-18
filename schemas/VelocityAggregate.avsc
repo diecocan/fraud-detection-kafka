@@ -1,0 +1,10 @@
+{
+  "type": "record",
+  "name": "VelocityAggregate",
+  "namespace": "com.diecocan.portfolio.fraud.avro",
+  "doc": "Internal aggregation state for the velocity rule: running count and most recent transaction seen in the current window",
+  "fields": [
+    { "name": "count", "type": "long", "doc": "Number of transactions seen so far in this window" },
+    { "name": "lastTransactionId", "type": "string", "doc": "Most recently observed transaction ID in this window" }
+  ]
+}

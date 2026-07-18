@@ -1,0 +1,18 @@
+{
+    "type": "record",
+    "name": "FraudAlert",
+    "namespace": "com.diecocan.portfolio.fraud.avro",
+    "doc": "Alert triggering by fraud detection rule",
+    "fields": [
+        {"name": "alertId", "type": "string", "doc": "unique Alert identifier (UUID)"},
+        {"name": "transactionId", "type": "string", "doc": "Transaction that triggered this alert"},
+        {"name": "accountId", "type": "string", "doc": "Account with flagged transaction"},
+        {"name": "reason", "type": {
+            "type": "enum",
+            "name": "AlertReason",
+            "symbols": ["VELOCITY", "IMPOSSIBLE_GEO", "AMOUNT_ANOMALY"]
+        }, "doc": "Why this alert was raised"},
+        {"name": "riskScore", "type": "double", "doc": "Risk confidence (0.0-1.0)"},
+        {"name": "detectedAt", "type": {"type": "long", "logicalType": "timestamp-millis"}, "doc": "When the alert was generated"}
+    ]
+}

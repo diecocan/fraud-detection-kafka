@@ -1,0 +1,103 @@
+services:
+
+  # ─────────────────────────────────────────────
+  # KAFKA BROKER (KRaft mode — no ZooKeeper)
+  # ─────────────────────────────────────────────
+  kafka:
+    image: apache/kafka:latest
+    container_name: kafka
+    ports:
+      - "9092:9092" # only the host-facing listener needs a host port mapping
+
+    environment:
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker, controller
+
+      # Three listeners: PLAINTEXT (host machine), BROKER (other containers), CONTROLLER (KRaft internals)
+      KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:9092, BROKER://0.0.0.0:9093, CONTROLLER://0.0.0.0:9094
+
+      # What address Kafka tells clients to reconnect to, per listener
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://localhost:9092, BROKER://kafka:9093
+
+      # Which protocol each listener name uses (PLAINTEXT = no TLS/SASL, fine for local dev)
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT, BROKER:PLAINTEXT, CONTROLLER:PLAINTEXT
+
+      # KRaft-specific: which listener carries controller/metadata traffic
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+
+      # Which listener brokers use to talk to each other (matters more with >1 broker)
+      KAFKA_INTER_BROKER_LISTENER_NAME: BROKER
+
+      # Which listener brokers use to talk to each other (matters more with >1 broker) (format: nodeId@host:controllerPort)
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9094
+
+      # Must be 1 — a single broker can't replicate to 3 copies (the Kafka default)
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+
+      # Forces every topic to be created explicitly (e.g. via a Spring NewTopic bean)
+      # instead of being silently auto-created with the broker default of 1 partition
+      # the moment any producer/consumer first touches it.
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: 'false'
+
+    healthcheck:
+      test: ["CMD-SHELL", "/opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:9092 --list"]
+      interval: 10s
+      timeout: 10s
+      retries: 5
+
+  # ─────────────────────────────────────────────
+  # SCHEMA REGISTRY (Confluent) — Avro schema store
+  # ─────────────────────────────────────────────
+  schema-registry:
+    image: confluentinc/cp-schema-registry:latest
+    container_name: schema-registry
+    depends_on:
+      kafka:
+        condition: service_healthy # wait for Kafka's healthcheck to pass, not just "container started"
+
+    ports:
+      - "8081:8081"
+    environment:
+      SCHEMA_REGISTRY_HOST_NAME: schema-registry
+      
+      # Talks to Kafka over the internal BROKER listener, since both run inside Docker's network
+      SCHEMA_REGISTRY_KAFKASTORE_BOOTSTRAP_SERVERS: PLAINTEXT://kafka:9093
+      SCHEMA_REGISTRY_LISTENERS: http://0.0.0.0:8081
+
+
+  # ─────────────────────────────────────────────
+  # MYSQL — persistence for transactions/alerts/accounts
+  # ─────────────────────────────────────────────
+  mysql:
+    image: mysql:8
+    container_name: mysql
+    ports:
+      - "3306:3306"
+    environment:
+      MYSQL_ROOT_PASSWORD: root
+      MYSQL_DATABASE: fraud_detection
+    volumes:
+      - mysql-data:/var/lib/mysql   # named volume so data survives `docker compose down`
+
+  # ─────────────────────────────────────────────
+  # KAFKA UI — visual inspection of topics/schemas
+  # ─────────────────────────────────────────────
+  kafka-ui:
+    image: provectuslabs/kafka-ui:latest
+    container_name: kafka-ui
+    depends_on:
+      kafka:
+        condition: service_healthy
+      schema-registry:
+        condition: service_started
+    ports:
+      - "8080:8080"
+    environment:
+      KAFKA_CLUSTERS_0_NAME: local
+      KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: kafka:9093
+      KAFKA_CLUSTERS_0_SCHEMAREGISTRY: http://schema-registry:8081
+
+volumes:
+  mysql-data:
+
+  

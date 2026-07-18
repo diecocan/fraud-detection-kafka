@@ -1,0 +1,32 @@
+server:
+  port: 8082
+
+spring:
+  application:
+    name: alert-consumer-api
+
+  kafka:
+    bootstrap-servers: localhost:9092
+    consumer:
+      group-id: alert-consumer-group
+      key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+      value-deserializer: io.confluent.kafka.serializers.KafkaAvroDeserializer
+      auto-offset-reset: earliest
+      properties:
+        schema.registry.url: http://localhost:8081
+        specific.avro.reader: true
+
+  datasource:
+    url: jdbc:mysql://localhost:3306/fraud_detection
+    username: root
+    password: root
+    driver-class-name: com.mysql.cj.jdbc.Driver
+
+  jpa:
+    hibernate:
+      ddl-auto: update
+    show-sql: true
+
+alert-consumer-api:
+  topic: alerts
+

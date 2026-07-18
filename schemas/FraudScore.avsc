@@ -1,0 +1,12 @@
+{
+    "type": "record",
+    "name": "FraudScore",
+    "namespace": "com.diecocan.portfolio.fraud.avro",
+    "doc": "ML model fraud probability score (phase 2)",
+    "fields": [
+        {"name": "transactionId", "type": "string", "doc": "transaction being scored"},
+        {"name": "score", "type": "double", "doc": "Fraud probability (0.0-1.0)"},
+        {"name": "modelVersion", "type": "string", "doc": "Which ML model version produced this"},
+        {"name": "scoredAt", "type": {"type": "long", "logicalType": "timestamp-millis"}, "doc": "When scoring occurred"}
+    ]
+}

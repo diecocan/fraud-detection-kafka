@@ -1,0 +1,19 @@
+spring:
+    application:
+        name: transaction-generator
+    main:
+        web-application-type: none
+    kafka:
+        bootstrap-servers: localhost:9092
+        producer:
+            key-serializer: org.apache.kafka.common.serialization.StringSerializer
+            value-serializer: io.confluent.kafka.serializers.KafkaAvroSerializer
+        properties:
+            schema.registry.url: http://localhost:8081
+
+transaction-generator:
+    topic: transactions
+    rate-ms: 100
+    num-accounts: 10
+    anomaly-injection-rate: 0.02
+    geo-anomaly-injection-rate: 0.01
