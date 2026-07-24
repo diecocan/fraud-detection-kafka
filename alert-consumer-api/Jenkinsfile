@@ -1,0 +1,26 @@
+pipeline {
+    agent none
+
+    stages {
+        stage('Build and test') {
+            agent {
+                docker {
+                    image 'maven:3.9.9-eclipse-temurin-17'
+                    args '-v maven-repo:/home/ubuntu/.m2'
+                }
+            }
+            steps {
+                dir('alert-consumer-api') {
+                    sh 'mvn clean verify'
+                }
+            }
+            post {
+                always {
+                    dir('alert-consumer-api') {
+                        junit 'target/surefire-reports/*.xml'
+                    }
+                }
+            }
+        }    
+    }
+}
