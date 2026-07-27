@@ -33,10 +33,13 @@
             <artifactId>spring-boot-starter-web</artifactId>
         </dependency>
 
-        <!-- Kafka consumer -->
+        <!-- Kafka consumer. Note: spring-kafka alone (Spring-for-Apache-Kafka, the
+             @KafkaListener/@EnableKafka library) has NO Spring Boot auto-configuration
+             glue — that lives in this starter, which is what actually wires @KafkaListener
+             methods to a real listener container built from spring.kafka.* properties. -->
         <dependency>
-            <groupId>org.springframework.kafka</groupId>
-            <artifactId>spring-kafka</artifactId>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-kafka</artifactId>
         </dependency>
 
         <!-- Persistence -->
