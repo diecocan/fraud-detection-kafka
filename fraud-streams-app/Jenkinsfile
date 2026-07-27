@@ -1,0 +1,97 @@
+pipeline {
+    agent none
+
+    stages {
+        stage('Build and test') {
+            agent {
+                docker {
+                    image 'maven:3.9.9-eclipse-temurin-17'
+                    args '-v maven-repo:/home/ubuntu/.m2'
+                }
+            }
+            steps {
+                dir('fraud-streams-app') {
+                    withCredentials([string(credentialsId: 'nvd-api-key', variable: 'NVD_API_KEY')]) {
+                        sh 'mvn clean verify -Dnvd.api.key=$NVD_API_KEY'
+                    }
+                }
+            }
+            post {
+                always {
+                    dir('fraud-streams-app') {
+                        junit 'target/surefire-reports/*.xml'
+                    }
+                }
+            }
+        }
+
+        stage('Docker build') {
+            agent { label 'built-in' }
+            steps {
+                // No dir('fraud-streams-app') here: the build context must be the
+                // workspace root so the Dockerfile can COPY the sibling schemas/ dir.
+                withCredentials([usernamePassword(credentialsId: 'ghcr-pat', usernameVariable: 'GHCR_USER', passwordVariable: 'GHCR_TOKEN')]) {
+                    sh """
+                        docker build -f fraud-streams-app/Dockerfile -t ghcr.io/diecocan/fraud-detection-kafka-fraud-streams-app:${env.GIT_COMMIT} .
+                        echo \$GHCR_TOKEN | docker login ghcr.io -u \$GHCR_USER --password-stdin
+                        docker push ghcr.io/diecocan/fraud-detection-kafka-fraud-streams-app:${env.GIT_COMMIT}
+                    """
+                }
+            }
+        }
+
+        stage('Ensure Kafka/MySQL stack is up') {
+            agent { label 'built-in' }
+            steps {
+                // Pinned project name for the same reason as the other Jenkinsfiles in
+                // this repo: Compose's default project name tracks the current directory,
+                // which differs between local runs (repo name) and Jenkins (job name).
+                sh 'docker compose -p fraud-detection-kafka up -d'
+            }
+        }
+
+        stage('Deploy to staging') {
+            agent { label 'built-in' }
+            steps {
+                sh """
+                    docker stop fraud-streams-app-staging || true
+                    docker rm fraud-streams-app-staging || true
+                    docker run -d --name fraud-streams-app-staging \\
+                        --network fraud-detection-kafka_default \\
+                        -e SPRING_APPLICATION_JSON='{"spring":{"kafka":{"bootstrap-servers":"kafka:9093","streams":{"application-id":"fraud-streams-app-staging","properties":{"schema.registry.url":"http://schema-registry:8081"}}}},"fraud-streams-app":{"topics":{"transactions":"transactions-staging","account-profiles":"account-profiles-staging","alerts":"alerts-staging"}}}' \\
+                        ghcr.io/diecocan/fraud-detection-kafka-fraud-streams-app:${env.GIT_COMMIT}
+                """
+                // No REST endpoint to curl (web-application-type: none) - verify by
+                // tailing logs for the KafkaStreams client reaching RUNNING state.
+                sh '''
+                    sleep 20
+                    docker logs fraud-streams-app-staging 2>&1 | grep -q "stream-client .* State transition from REBALANCING to RUNNING"
+                '''
+            }
+        }
+
+        stage('Approval') {
+            steps {
+                input message: 'Promote this build to production?', ok: 'Deploy to production'
+            }
+        }
+
+        stage('Deploy to production') {
+            agent { label 'built-in' }
+            steps {
+                sh """
+                    docker stop fraud-streams-app-prod || true
+                    docker rm fraud-streams-app-prod || true
+                    docker run -d --name fraud-streams-app-prod \\
+                        --network fraud-detection-kafka_default \\
+                        -e SPRING_APPLICATION_JSON='{"spring":{"kafka":{"bootstrap-servers":"kafka:9093","streams":{"application-id":"fraud-streams-app-prod","properties":{"schema.registry.url":"http://schema-registry:8081"}}}},"fraud-streams-app":{"topics":{"transactions":"transactions-prod","account-profiles":"account-profiles-prod","alerts":"alerts-prod"}}}' \\
+                        ghcr.io/diecocan/fraud-detection-kafka-fraud-streams-app:${env.GIT_COMMIT}
+                """
+                sh '''
+                    sleep 20
+                    docker logs fraud-streams-app-prod 2>&1 | grep -q "stream-client .* State transition from REBALANCING to RUNNING"
+                '''
+            }
+        }
+    }
+}
