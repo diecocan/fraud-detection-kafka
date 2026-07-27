@@ -13,6 +13,10 @@ spring:
                 state.dir: /tmp/kafka-streams-fraud-app
 
 fraud-streams-app:
+    topics:
+        transactions: transactions
+        account-profiles: account-profiles
+        alerts: alerts
     velocity:
         threshold: 5
         window-minutes: 2

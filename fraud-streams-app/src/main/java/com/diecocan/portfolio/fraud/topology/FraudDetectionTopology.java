@@ -37,6 +37,15 @@ public class FraudDetectionTopology {
     @Value("${fraud-streams-app.impossible-geo.max-travel-minutes}")
     private long maxTravelMinutes;
 
+    @Value("${fraud-streams-app.topics.transactions}")
+    private String transactionsTopic;
+
+    @Value("${fraud-streams-app.topics.account-profiles}")
+    private String accountProfilesTopic;
+
+    @Value("${fraud-streams-app.topics.alerts}")
+    private String alertsTopic;
+
     @Autowired
     public void buildPipeLine(StreamsBuilder streamsBuilder) {
         SpecificAvroSerde<Transaction> transactionSerde = new SpecificAvroSerde<>();
@@ -55,12 +64,12 @@ public class FraudDetectionTopology {
         accountProfileSerde.configure(serdeConfigMap, false);
 
         KStream<String, Transaction> transactions = streamsBuilder.stream(
-                "transactions",
+                transactionsTopic,
                 Consumed.with(Serdes.String(), transactionSerde)
         );
 
         KTable<String, AccountProfile> accountProfilesFromTopic = streamsBuilder.table(
-                "account-profiles",
+                accountProfilesTopic,
                 Consumed.with(Serdes.String(), accountProfileSerde)
         );
 
@@ -100,7 +109,7 @@ public class FraudDetectionTopology {
                     Materialized.with(Serdes.String(), accountProfileSerde)
                 );
 
-        accountProfiles.toStream().to("account-profiles", Produced.with(Serdes.String(), accountProfileSerde));
+        accountProfiles.toStream().to(accountProfilesTopic, Produced.with(Serdes.String(), accountProfileSerde));
 
         KTable<Windowed<String>, VelocityAggregate> velocityAggregates = transactions
                 .groupByKey()
@@ -130,7 +139,7 @@ public class FraudDetectionTopology {
 
                     return KeyValue.pair(accountId, alert);
                 })
-                .to("alerts", Produced.with(Serdes.String(), fraudAlertSerde));
+                .to(alertsTopic, Produced.with(Serdes.String(), fraudAlertSerde));
 
         KStream<String, FraudAlert> amountAnomalies = transactions.join(
                 accountProfilesFromTopic,
@@ -153,7 +162,7 @@ public class FraudDetectionTopology {
         )
        .filter((accountId, alert) -> alert != null);
 
-        amountAnomalies.to("alerts", Produced.with(Serdes.String(), fraudAlertSerde));
+        amountAnomalies.to(alertsTopic, Produced.with(Serdes.String(), fraudAlertSerde));
 
         KStream<String, FraudAlert> geoAnomalies = transactions.join(
                         accountProfilesFromTopic,
@@ -190,6 +199,6 @@ public class FraudDetectionTopology {
                 )
                 .filter((accountId, alert) -> alert != null);
 
-        geoAnomalies.to("alerts", Produced.with(Serdes.String(), fraudAlertSerde));
+        geoAnomalies.to(alertsTopic, Produced.with(Serdes.String(), fraudAlertSerde));
     }
 }
