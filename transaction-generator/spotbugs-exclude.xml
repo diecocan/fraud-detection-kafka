@@ -1,0 +1,15 @@
+<FindBugsFilter>
+    <!-- This entire package is Avro-generated code (from ../schemas/*.avsc),
+         regenerated identically on every build. getSpecificData()/getDecoder()
+         boilerplate on every schema class trips EI_EXPOSE_REP/MS_EXPOSE_REP —
+         not actionable, since we don't write or edit this code. -->
+    <Match>
+        <Package name="com.diecocan.portfolio.fraud.avro"/>
+    </Match>
+
+    <!-- Constructor-injected Spring beans (e.g. KafkaTemplate) are not externally-
+         mutable state; this pattern otherwise flags nearly every DI constructor. -->
+    <Match>
+        <Bug pattern="EI_EXPOSE_REP2"/>
+    </Match>
+</FindBugsFilter>

@@ -11,7 +11,9 @@ pipeline {
             }
             steps {
                 dir('transaction-generator') {
-                    sh 'mvn clean verify'
+                    withCredentials([string(credentialsId: 'nvd-api-key', variable: 'NVD_API_KEY')]) {
+                        sh 'mvn clean verify -Dnvd.api.key=$NVD_API_KEY'
+                    }
                 }
             }
             post {
@@ -20,6 +22,76 @@ pipeline {
                         junit 'target/surefire-reports/*.xml'
                     }
                 }
+            }
+        }
+
+        stage('Docker build') {
+            agent { label 'built-in' }
+            steps {
+                // No dir('transaction-generator') here: the build context must be the
+                // workspace root so the Dockerfile can COPY the sibling schemas/ dir.
+                withCredentials([usernamePassword(credentialsId: 'ghcr-pat', usernameVariable: 'GHCR_USER', passwordVariable: 'GHCR_TOKEN')]) {
+                    sh """
+                        docker build -f transaction-generator/Dockerfile -t ghcr.io/diecocan/fraud-detection-kafka-transaction-generator:${env.GIT_COMMIT} .
+                        echo \$GHCR_TOKEN | docker login ghcr.io -u \$GHCR_USER --password-stdin
+                        docker push ghcr.io/diecocan/fraud-detection-kafka-transaction-generator:${env.GIT_COMMIT}
+                    """
+                }
+            }
+        }
+
+        stage('Ensure Kafka/MySQL stack is up') {
+            agent { label 'built-in' }
+            steps {
+                // Pinned project name for the same reason as alert-consumer-api's Jenkinsfile:
+                // Compose's default project name tracks the current directory, which differs
+                // between local runs (repo name) and Jenkins (job name), causing collisions.
+                sh 'docker compose -p fraud-detection-kafka up -d'
+            }
+        }
+
+        stage('Deploy to staging') {
+            agent { label 'built-in' }
+            steps {
+                sh """
+                    docker stop transaction-generator-staging || true
+                    docker rm transaction-generator-staging || true
+                    docker run -d --name transaction-generator-staging \\
+                        --network fraud-detection-kafka_default \\
+                        -e SPRING_APPLICATION_JSON='{"spring":{"kafka":{"bootstrap-servers":"kafka:9093","properties":{"schema.registry.url":"http://schema-registry:8081"}}},"transaction-generator":{"topic":"transactions-staging"}}' \\
+                        ghcr.io/diecocan/fraud-detection-kafka-transaction-generator:${env.GIT_COMMIT}
+                """
+                // No REST endpoint to curl (web-application-type: none) - this is a
+                // scheduled background producer, so verify by tailing its own logs
+                // for the "Sent transaction" line instead.
+                sh '''
+                    sleep 15
+                    docker logs transaction-generator-staging 2>&1 | grep -q "Sent transaction"
+                '''
+            }
+        }
+
+        stage('Approval') {
+            steps {
+                input message: 'Promote this build to production?', ok: 'Deploy to production'
+            }
+        }
+
+        stage('Deploy to production') {
+            agent { label 'built-in' }
+            steps {
+                sh """
+                    docker stop transaction-generator-prod || true
+                    docker rm transaction-generator-prod || true
+                    docker run -d --name transaction-generator-prod \\
+                        --network fraud-detection-kafka_default \\
+                        -e SPRING_APPLICATION_JSON='{"spring":{"kafka":{"bootstrap-servers":"kafka:9093","properties":{"schema.registry.url":"http://schema-registry:8081"}}},"transaction-generator":{"topic":"transactions-prod"}}' \\
+                        ghcr.io/diecocan/fraud-detection-kafka-transaction-generator:${env.GIT_COMMIT}
+                """
+                sh '''
+                    sleep 15
+                    docker logs transaction-generator-prod 2>&1 | grep -q "Sent transaction"
+                '''
             }
         }
     }
