@@ -23,6 +23,21 @@ pipeline {
                     }
                 }
             }
-        }    
+        }
+
+        stage('Docker build') {
+            agent { label 'built-in' }
+            steps {
+                // No dir('alert-consumer-api') here: the build context must be the
+                // workspace root so the Dockerfile can COPY the sibling schemas/ dir.
+                withCredentials([usernamePassword(credentialsId: 'ghcr-pat', usernameVariable: 'GHCR_USER', passwordVariable: 'GHCR_TOKEN')]) {
+                    sh """
+                        docker build -f alert-consumer-api/Dockerfile -t ghcr.io/diecocan/fraud-detection-kafka-alert-consumer-api:${env.GIT_COMMIT} .
+                        echo \$GHCR_TOKEN | docker login ghcr.io -u \$GHCR_USER --password-stdin
+                        docker push ghcr.io/diecocan/fraud-detection-kafka-alert-consumer-api:${env.GIT_COMMIT}
+                    """
+                }
+            }
+        }
     }
 }
