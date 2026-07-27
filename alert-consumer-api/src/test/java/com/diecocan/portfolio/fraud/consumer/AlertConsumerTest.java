@@ -5,10 +5,10 @@ import com.diecocan.portfolio.fraud.avro.FraudAlert;
 import com.diecocan.portfolio.fraud.entity.AlertEntity;
 import com.diecocan.portfolio.fraud.repository.AlertRepository;
 import com.diecocan.portfolio.fraud.sse.AlertBroadcastService;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
-import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
@@ -26,8 +26,12 @@ class AlertConsumerTest {
     @Mock
     AlertBroadcastService broadcastService;
 
-    @InjectMocks
     AlertConsumer consumer;
+
+    @BeforeEach
+    void setUp() {
+        consumer = new AlertConsumer(alertRepository, broadcastService);
+    }
 
     @Test
     void consume_mapsAvroAlertToEntity_savesAndBroadcasts() {

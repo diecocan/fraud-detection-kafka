@@ -1,0 +1,9 @@
+<FindBugsFilter>
+    <!-- This entire package is Avro-generated code (from ../schemas/*.avsc),
+         regenerated identically on every build. getSpecificData()/getDecoder()
+         boilerplate on every schema class trips EI_EXPOSE_REP/MS_EXPOSE_REP —
+         not actionable, since we don't write or edit this code. -->
+    <Match>
+        <Package name="com.diecocan.portfolio.fraud.avro"/>
+    </Match>
+</FindBugsFilter>
