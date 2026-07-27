@@ -43,7 +43,12 @@ pipeline {
         stage('Ensure Kafka/MySQL stack is up') {
             agent { label 'built-in' }
             steps {
-                sh 'docker compose up -d'
+                // Pin the Compose project name explicitly. Left to its default, Compose
+                // derives it from the current directory name - which is the repo name
+                // locally but the *job* name in Jenkins' workspace, producing a different
+                // network/project each time and colliding on the containers' hardcoded
+                // global names (kafka, mysql) instead of recognizing them as already up.
+                sh 'docker compose -p fraud-detection-kafka up -d'
             }
         }
 
