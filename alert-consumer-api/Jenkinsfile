@@ -1,3 +1,5 @@
+@Library('fraud-pipeline-lib') _
+
 pipeline {
     agent none
 
@@ -10,17 +12,11 @@ pipeline {
                 }
             }
             steps {
-                dir('alert-consumer-api') {
-                    withCredentials([string(credentialsId: 'nvd-api-key', variable: 'NVD_API_KEY')]) {
-                        sh 'mvn clean verify -Dnvd.api.key=$NVD_API_KEY'
-                    }
-                }
+                mavenBuildAndTest(dir: 'alert-consumer-api')
             }
             post {
                 always {
-                    dir('alert-consumer-api') {
-                        junit 'target/surefire-reports/*.xml'
-                    }
+                    mavenBuildAndTestReport(dir: 'alert-consumer-api')
                 }
             }
         }
@@ -28,71 +24,53 @@ pipeline {
         stage('Docker build') {
             agent { label 'built-in' }
             steps {
-                // No dir('alert-consumer-api') here: the build context must be the
-                // workspace root so the Dockerfile can COPY the sibling schemas/ dir.
-                withCredentials([usernamePassword(credentialsId: 'ghcr-pat', usernameVariable: 'GHCR_USER', passwordVariable: 'GHCR_TOKEN')]) {
-                    sh """
-                        docker build -f alert-consumer-api/Dockerfile -t ghcr.io/diecocan/fraud-detection-kafka-alert-consumer-api:${env.GIT_COMMIT} .
-                        echo \$GHCR_TOKEN | docker login ghcr.io -u \$GHCR_USER --password-stdin
-                        docker push ghcr.io/diecocan/fraud-detection-kafka-alert-consumer-api:${env.GIT_COMMIT}
-                    """
-                }
+                // Build context stays the repo root (not dir-scoped): the Dockerfile
+                // needs the sibling schemas/ directory for Avro codegen.
+                dockerBuildAndPush(
+                    image: 'ghcr.io/diecocan/fraud-detection-kafka-alert-consumer-api',
+                    dockerfile: 'alert-consumer-api/Dockerfile'
+                )
             }
         }
 
         stage('Ensure Kafka/MySQL stack is up') {
             agent { label 'built-in' }
             steps {
-                // Pin the Compose project name explicitly. Left to its default, Compose
-                // derives it from the current directory name - which is the repo name
-                // locally but the *job* name in Jenkins' workspace, producing a different
-                // network/project each time and colliding on the containers' hardcoded
-                // global names (kafka, mysql) instead of recognizing them as already up.
-                sh 'docker compose -p fraud-detection-kafka up -d'
+                ensureComposeStackUp('fraud-detection-kafka')
             }
         }
 
         stage('Deploy to staging') {
             agent { label 'built-in' }
             steps {
-                sh """
-                    docker stop alert-consumer-api-staging || true
-                    docker rm alert-consumer-api-staging || true
-                    docker run -d --name alert-consumer-api-staging \\
-                        --network fraud-detection-kafka_default \\
-                        -p 8094:8082 \\
-                        -e SPRING_APPLICATION_JSON='{"spring":{"kafka":{"bootstrap-servers":"kafka:9093","consumer":{"group-id":"alert-consumer-group-staging","properties":{"schema.registry.url":"http://schema-registry:8081"}}},"datasource":{"url":"jdbc:mysql://mysql:3306/fraud_detection"}}}' \\
-                        ghcr.io/diecocan/fraud-detection-kafka-alert-consumer-api:${env.GIT_COMMIT}
-                """
-                sh '''
-                    sleep 15
-                    curl -sf http://host.docker.internal:8094/api/alerts
-                '''
+                deployContainer(
+                    name: 'alert-consumer-api-staging',
+                    image: "ghcr.io/diecocan/fraud-detection-kafka-alert-consumer-api:${env.GIT_COMMIT}",
+                    network: 'fraud-detection-kafka_default',
+                    ports: '-p 8094:8082',
+                    envJson: '{"spring":{"kafka":{"bootstrap-servers":"kafka:9093","consumer":{"group-id":"alert-consumer-group-staging","properties":{"schema.registry.url":"http://schema-registry:8081"}}},"datasource":{"url":"jdbc:mysql://mysql:3306/fraud_detection"}}}'
+                )
+                verifyHttp(sleepSeconds: 15, urls: ['http://host.docker.internal:8094/api/alerts'])
             }
         }
 
         stage('Approval') {
             steps {
-                input message: 'Promote this build to production?', ok: 'Deploy to production'
+                approvalGate()
             }
         }
 
         stage('Deploy to production') {
             agent { label 'built-in' }
             steps {
-                sh """
-                    docker stop alert-consumer-api-prod || true
-                    docker rm alert-consumer-api-prod || true
-                    docker run -d --name alert-consumer-api-prod \\
-                        --network fraud-detection-kafka_default \\
-                        -p 8095:8082 \\
-                        -e SPRING_APPLICATION_JSON='{"spring":{"kafka":{"bootstrap-servers":"kafka:9093","consumer":{"group-id":"alert-consumer-group-prod","properties":{"schema.registry.url":"http://schema-registry:8081"}}},"datasource":{"url":"jdbc:mysql://mysql:3306/fraud_detection"}}}' \\
-                        ghcr.io/diecocan/fraud-detection-kafka-alert-consumer-api:${env.GIT_COMMIT}
-                """
-                sh '''
-                    sleep 15
-                    curl -sf http://host.docker.internal:8095/api/alerts
-                '''
+                deployContainer(
+                    name: 'alert-consumer-api-prod',
+                    image: "ghcr.io/diecocan/fraud-detection-kafka-alert-consumer-api:${env.GIT_COMMIT}",
+                    network: 'fraud-detection-kafka_default',
+                    ports: '-p 8095:8082',
+                    envJson: '{"spring":{"kafka":{"bootstrap-servers":"kafka:9093","consumer":{"group-id":"alert-consumer-group-prod","properties":{"schema.registry.url":"http://schema-registry:8081"}}},"datasource":{"url":"jdbc:mysql://mysql:3306/fraud_detection"}}}'
+                )
+                verifyHttp(sleepSeconds: 15, urls: ['http://host.docker.internal:8095/api/alerts'])
             }
         }
     }

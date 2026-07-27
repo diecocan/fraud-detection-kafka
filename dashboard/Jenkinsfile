@@ -1,3 +1,5 @@
+@Library('fraud-pipeline-lib') _
+
 pipeline {
     agent none
 
@@ -10,19 +12,11 @@ pipeline {
                 }
             }
             steps {
-                dir('dashboard') {
-                    sh '''
-                        npm ci
-                        npm run lint
-                        npm test
-                    '''
-                }
+                nodeBuildAndTest(dir: 'dashboard')
             }
             post {
                 always {
-                    dir('dashboard') {
-                        junit 'reports/junit.xml'
-                    }
+                    nodeBuildAndTestReport(dir: 'dashboard')
                 }
             }
         }
@@ -30,63 +24,47 @@ pipeline {
         stage('Docker build') {
             agent { label 'built-in' }
             steps {
-                dir('dashboard') {
-                    withCredentials([usernamePassword(credentialsId: 'ghcr-pat', usernameVariable: 'GHCR_USER', passwordVariable: 'GHCR_TOKEN')]) {
-                        sh """
-                            docker build -t ghcr.io/diecocan/fraud-detection-kafka-dashboard:${env.GIT_COMMIT} .
-                            echo \$GHCR_TOKEN | docker login ghcr.io -u \$GHCR_USER --password-stdin
-                            docker push ghcr.io/diecocan/fraud-detection-kafka-dashboard:${env.GIT_COMMIT}
-                        """
-                    }
-                }
+                dockerBuildAndPush(image: 'ghcr.io/diecocan/fraud-detection-kafka-dashboard', dir: 'dashboard')
             }
         }
 
         stage('Deploy to staging') {
             agent { label 'built-in' }
             steps {
-                sh """
-                    docker stop fraud-detection-kafka-dashboard-staging || true
-                    docker rm fraud-detection-kafka-dashboard-staging || true
-                    docker run -d --name fraud-detection-kafka-dashboard-staging \\
-                        --network fraud-detection-kafka_default \\
-                        -p 8096:80 \\
-                        -e BACKEND_HOST=alert-consumer-api-staging \\
-                        -e BACKEND_PORT=8082 \\
-                        ghcr.io/diecocan/fraud-detection-kafka-dashboard:${env.GIT_COMMIT}
-                """
-                sh '''
-                    sleep 5
-                    curl -sf http://host.docker.internal:8096/
-                    curl -sf http://host.docker.internal:8096/api/alerts/stats
-                '''
+                deployContainer(
+                    name: 'fraud-detection-kafka-dashboard-staging',
+                    image: "ghcr.io/diecocan/fraud-detection-kafka-dashboard:${env.GIT_COMMIT}",
+                    network: 'fraud-detection-kafka_default',
+                    ports: '-p 8096:80',
+                    envVars: [BACKEND_HOST: 'alert-consumer-api-staging', BACKEND_PORT: '8082']
+                )
+                verifyHttp(sleepSeconds: 5, urls: [
+                    'http://host.docker.internal:8096/',
+                    'http://host.docker.internal:8096/api/alerts/stats'
+                ])
             }
         }
 
         stage('Approval') {
             steps {
-                input message: 'Promote this build to production?', ok: 'Deploy to production'
+                approvalGate()
             }
         }
 
         stage('Deploy to production') {
             agent { label 'built-in' }
             steps {
-                sh """
-                    docker stop fraud-detection-kafka-dashboard-prod || true
-                    docker rm fraud-detection-kafka-dashboard-prod || true
-                    docker run -d --name fraud-detection-kafka-dashboard-prod \\
-                        --network fraud-detection-kafka_default \\
-                        -p 8097:80 \\
-                        -e BACKEND_HOST=alert-consumer-api-prod \\
-                        -e BACKEND_PORT=8082 \\
-                        ghcr.io/diecocan/fraud-detection-kafka-dashboard:${env.GIT_COMMIT}
-                """
-                sh '''
-                    sleep 5
-                    curl -sf http://host.docker.internal:8097/
-                    curl -sf http://host.docker.internal:8097/api/alerts/stats
-                '''
+                deployContainer(
+                    name: 'fraud-detection-kafka-dashboard-prod',
+                    image: "ghcr.io/diecocan/fraud-detection-kafka-dashboard:${env.GIT_COMMIT}",
+                    network: 'fraud-detection-kafka_default',
+                    ports: '-p 8097:80',
+                    envVars: [BACKEND_HOST: 'alert-consumer-api-prod', BACKEND_PORT: '8082']
+                )
+                verifyHttp(sleepSeconds: 5, urls: [
+                    'http://host.docker.internal:8097/',
+                    'http://host.docker.internal:8097/api/alerts/stats'
+                ])
             }
         }
     }
