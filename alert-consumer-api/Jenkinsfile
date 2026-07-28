@@ -48,7 +48,7 @@ pipeline {
                     image: "ghcr.io/diecocan/fraud-detection-kafka-alert-consumer-api:${env.GIT_COMMIT}",
                     network: 'fraud-detection-kafka_default',
                     ports: '-p 8094:8082',
-                    envJson: '{"spring":{"kafka":{"bootstrap-servers":"kafka:9093","consumer":{"group-id":"alert-consumer-group-staging","properties":{"schema.registry.url":"http://schema-registry:8081"}}},"datasource":{"url":"jdbc:mysql://mysql:3306/fraud_detection"}}}'
+                    envJson: '{"spring":{"kafka":{"bootstrap-servers":"kafka:9093","consumer":{"group-id":"alert-consumer-group-staging","properties":{"schema.registry.url":"http://schema-registry:8081"}}},"datasource":{"url":"jdbc:mysql://mysql:3306/fraud_detection"}},"alert-consumer-api":{"topic":"alerts-staging"}}'
                 )
                 verifyHttp(sleepSeconds: 15, urls: ['http://host.docker.internal:8094/api/alerts'])
             }
@@ -68,7 +68,7 @@ pipeline {
                     image: "ghcr.io/diecocan/fraud-detection-kafka-alert-consumer-api:${env.GIT_COMMIT}",
                     network: 'fraud-detection-kafka_default',
                     ports: '-p 8095:8082',
-                    envJson: '{"spring":{"kafka":{"bootstrap-servers":"kafka:9093","consumer":{"group-id":"alert-consumer-group-prod","properties":{"schema.registry.url":"http://schema-registry:8081"}}},"datasource":{"url":"jdbc:mysql://mysql:3306/fraud_detection"}}}'
+                    envJson: '{"spring":{"kafka":{"bootstrap-servers":"kafka:9093","consumer":{"group-id":"alert-consumer-group-prod","properties":{"schema.registry.url":"http://schema-registry:8081"}}},"datasource":{"url":"jdbc:mysql://mysql:3306/fraud_detection"}},"alert-consumer-api":{"topic":"alerts-prod"}}'
                 )
                 verifyHttp(sleepSeconds: 15, urls: ['http://host.docker.internal:8095/api/alerts'])
             }
