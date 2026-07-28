@@ -62,11 +62,12 @@ A simulated bank/payment platform that generates a continuous stream of transact
 |-------|-----------|
 | **Streaming** | Apache Kafka (KRaft mode, `apache/kafka` image), Kafka Streams |
 | **Schema** | Avro + Confluent Schema Registry |
-| **Backend** | Java 17, Spring Boot 3.3, Spring for Apache Kafka, Spring Data JPA |
+| **Backend** | Java 17, Spring Boot 4.1.0, Spring for Apache Kafka, Spring Data JPA |
 | **Persistence** | MySQL 8, Hibernate |
 | **Real-time push** | Server-Sent Events (SSE) |
 | **Frontend** | React 19, Vite, recharts (v2) |
 | **Infrastructure** | Docker Compose (local dev) |
+| **CI/CD** | Jenkins (self-hosted, Docker) — see [CI/CD Pipeline](#cicd-pipeline) below |
 | **Future ML** | Python, scikit-learn (Phase 2, not yet built) |
 
 ---
@@ -171,6 +172,8 @@ Open `http://localhost:5173`. The Vite dev server proxies `/api/*` to `localhost
 | `alerts` | `accountId` | `FraudAlert.avsc` | 3 | Rule-based fraud flags (velocity, amount anomaly, impossible geo) |
 | `scores` | `transactionId` | `FraudScore.avsc` | 3 | ML model output — Phase 2, not yet produced |
 
+Topic names above are the local-dev defaults. Staging and production each get their own isolated copies (`transactions-staging`/`transactions-prod`, `account-profiles-staging`/`-prod`, `alerts-staging`/`-prod`) via environment-specific property overrides at deploy time — see [CI/CD Pipeline](#cicd-pipeline). `fraud-streams-app` also gets a distinct Kafka Streams `application-id` per environment for the same reason: sharing either a topic or an `application-id`/consumer-group between "different" environments makes Kafka treat them as replicas of one logical consumer and split partitions between them instead of each processing independently.
+
 ---
 
 ## Design Decisions
@@ -195,6 +198,56 @@ Each alert shows two independent badges: a reason badge (color-matched to the pi
 
 ### Backward-compatible schema evolution
 Schema Registry is configured for `BACKWARD` compatibility (the default), meaning new optional fields can be added to any schema over time without breaking producers/consumers already running old code — demonstrated directly when `AccountProfile.avsc` gained geography-tracking fields (`lastCity`, `lastCountry`, `lastTransactionTimestamp`) mid-project via the standard `["null", type]` + `"default": null` pattern.
+
+---
+
+## CI/CD Pipeline
+
+Four independent, self-hosted Jenkins pipelines (Docker) — one per deployable component — each takes a commit all the way from build through production:
+
+```
+git push → Build & test → Quality gates → Containerize → Push to GHCR
+         → Deploy to staging → [manual approval] → Deploy to production
+```
+
+All four call into [`fraud-pipeline-lib`](https://github.com/diecocan/fraud-pipeline-lib), a shared Jenkins library holding the build/test/containerize/deploy steps common to this project's Jenkinsfiles and `diecocan-tools`' two — extracted once six near-identical Jenkinsfiles had converged on the same shape (`mavenBuildAndTest`, `nodeBuildAndTest`, `dockerBuildAndPush`, `ensureComposeStackUp`, `deployContainer`, `verifyHttp`/`verifyLogs`, `approvalGate`).
+
+### Pipeline run order
+
+The four jobs aren't independent at runtime — each downstream component expects its upstream data source to already exist for a given environment. Run them in this order (per environment) for a fully working system:
+
+1. **`transaction-generator`** — creates the `transactions-{env}` topic and starts producing. Nothing downstream has data without this running first (this broker has `auto.create.topics.enable=false`, so the topic won't just spring into existence).
+2. **`fraud-streams-app`** — consumes `transactions-{env}`, creates and produces to `account-profiles-{env}`/`alerts-{env}`.
+3. **`alert-consumer-api`** — consumes `alerts-{env}`, persists to MySQL, serves the REST API + SSE stream the dashboard depends on.
+4. **`dashboard`** — its own deploy health-check curls `alert-consumer-api-{env}` through its nginx reverse proxy, so that container needs to already be running.
+
+Skipping a step doesn't fail loudly — `fraud-streams-app` will just sit unable to reach `RUNNING` within its health-check window if its input topic doesn't exist yet, and the dashboard will simply show no alerts if `alert-consumer-api` isn't running (this exact symptom happened once in practice: `alert-consumer-api` was still pointed at a stale, pre-isolation topic — see the per-environment isolation note above).
+
+**`alert-consumer-api`**, **`transaction-generator`**, **`fraud-streams-app`** (each its own Jenkins job):
+- Build/test: Maven, JUnit 5, inside a `maven` Docker agent
+- Quality gates, all enforced in `mvn verify`: **JaCoCo** (≥70% instruction coverage), **SpotBugs** (Medium threshold; the Avro-generated `*.avro` package is excluded by package since it's 100% regenerated boilerplate), **OWASP Dependency-Check** (fails on any CVE with CVSS ≥ 7) — this gate is what forced all three onto **Spring Boot 4.1.0**, which in turn required swapping the raw `spring-kafka` dependency for `spring-boot-starter-kafka` (Boot 4 splits Kafka's autoconfiguration into its own opt-in starter; without it, `@KafkaListener`, `KafkaTemplate`, and `@EnableKafkaStreams`'s default config all silently fail to wire up)
+- Docker build context is the **repo root**, not the component subdirectory — the Dockerfile needs the sibling `schemas/` directory for Avro codegen
+- A shared `Ensure Kafka/MySQL stack is up` stage (`docker compose -p fraud-detection-kafka up -d`, idempotent) runs before deploy, since these components need a live broker just to start
+- `transaction-generator` and `fraud-streams-app` have no REST endpoint (`web-application-type: none`), so their deploy stages verify health by tailing container logs for a marker line instead of `curl`
+
+**`dashboard`** (separate Jenkins job):
+- Build/test: `npm ci`, ESLint, Vitest + React Testing Library (chosen over Jest/webpack since it's the natural fit for this Vite project) — 21 tests, ≥70% coverage gate
+- Multi-stage Dockerfile (Vite build → `nginx` runtime), `envsubst`-templated nginx config reverse-proxying `/api/*` to `alert-consumer-api` — configured for Server-Sent Events specifically (`proxy_buffering off`, HTTP/1.1, cleared `Connection` header), since the live alert feed would otherwise sit buffered until the connection closed instead of streaming in real time
+
+**Environment isolation:** staging and production don't just run on different ports — they're fully isolated Kafka consumers/producers, each with its own topics (`transactions-{env}`, `account-profiles-{env}`, `alerts-{env}`) and, for `fraud-streams-app`, its own Kafka Streams `application-id`. All wired at container-start time via `SPRING_APPLICATION_JSON`, so the *same* image runs unchanged in every environment.
+
+**Images**: [ghcr.io — diecocan's packages](https://github.com/diecocan?tab=packages), tagged by git commit SHA (never `latest`).
+
+**Deploy targets** (local Docker containers on the pipeline host, all on the `fraud-detection-kafka_default` network):
+
+| Component | Staging | Production |
+|---|---|---|
+| `alert-consumer-api` | `:8094` | `:8095` |
+| `transaction-generator` | *(no port — background producer)* | *(no port)* |
+| `fraud-streams-app` | *(no port — no REST endpoint)* | *(no port)* |
+| `dashboard` | `:8096` | `:8097` |
+
+A manual approval gate sits between staging and production in every pipeline — production always runs the *exact* image already verified in staging, never a rebuild.
 
 ---
 
