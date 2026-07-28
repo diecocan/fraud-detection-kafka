@@ -6,52 +6,30 @@ A simulated bank/payment platform that generates a continuous stream of transact
 
 ## Architecture Overview
 
-```
-┌─────────────────────────────────────────────────────────┐
-│ Transaction Generator (Spring Boot)                      │
-│ Produces synthetic transactions with Avro schema         │
-└──────────────────────┬────────────────────────────────────┘
-                       │ PLAINTEXT://localhost:9092
-                 ┌─────▼────────┐
-                 │  Apache Kafka │
-                 │   (KRaft)     │
-                 │               │
-                 │ Topics:       │
-                 │ - transactions│
-                 │ - account-    │
-                 │   profiles    │
-                 │ - alerts      │
-                 └─────┬─────────┘
-                       │
-                 ┌─────▼─────────────────────┐
-                 │  Fraud Detection           │
-                 │  Kafka Streams App (Java)  │
-                 │  - velocity rule           │
-                 │  - amount-anomaly rule     │
-                 │  - impossible-geo rule     │
-                 └─────┬──────────────────────┘
-                       │ alerts topic
-                 ┌─────▼──────────────────────┐
-                 │  Alert Consumer API         │
-                 │  (Spring Boot)              │
-                 │  - @KafkaListener → MySQL   │
-                 │  - REST API (paginated,     │
-                 │    per-account, stats)      │
-                 │  - SSE broadcast            │
-                 └─────┬───────────┬────────────┘
-                       │ REST      │ SSE (live push)
-                       │           │
-                 ┌─────▼───────────▼───────────┐
-                 │  React Dashboard (Vite)      │
-                 │  - Live alert feed (table)   │
-                 │  - Alerts-by-reason chart    │
-                 │  - Account drill-down        │
-                 └───────────────────────────────┘
+```mermaid
+flowchart TB
+    TG["<b>Transaction Generator</b> (Spring Boot)<br/>Produces synthetic transactions with Avro schema"]
 
-┌───────────────────────────────────────────────────┐
-│   Confluent Schema Registry (Avro schemas)          │
-│   used by every producer/consumer above             │
-└───────────────────────────────────────────────────┘
+    TG -->|"PLAINTEXT://localhost:9092"| K
+
+    subgraph K["Apache Kafka (KRaft)"]
+        direction TB
+        T1[transactions]
+        T2[account-profiles]
+        T3[alerts]
+    end
+
+    K --> FS["<b>Fraud Detection Kafka Streams App</b> (Java)<br/>- velocity rule<br/>- amount-anomaly rule<br/>- impossible-geo rule"]
+
+    FS -->|alerts topic| AC["<b>Alert Consumer API</b> (Spring Boot)<br/>- @KafkaListener → MySQL<br/>- REST API (paginated, per-account, stats)<br/>- SSE broadcast"]
+
+    AC -->|REST| DB["<b>React Dashboard</b> (Vite)<br/>- Live alert feed (table)<br/>- Alerts-by-reason chart<br/>- Account drill-down"]
+    AC -->|"SSE (live push)"| DB
+
+    SR["Confluent Schema Registry<br/>(Avro schemas)<br/>used by every producer/consumer above"]
+    SR -.-> TG
+    SR -.-> FS
+    SR -.-> AC
 ```
 
 ---
@@ -205,9 +183,19 @@ Schema Registry is configured for `BACKWARD` compatibility (the default), meanin
 
 Four independent, self-hosted Jenkins pipelines (Docker) — one per deployable component — each takes a commit all the way from build through production:
 
-```
-git push → Build & test → Quality gates → Containerize → Push to GHCR
-         → Deploy to staging → [manual approval] → Deploy to production
+```mermaid
+flowchart LR
+    A[git push] --> B[Build & test]
+    B --> G1[JaCoCo / Vitest coverage ≥ 70%]
+    B --> G2[SpotBugs / ESLint]
+    B --> G3[OWASP Dependency-Check\nCVSS ≥ 7 fails the build]
+    G1 --> C[Containerize]
+    G2 --> C
+    G3 --> C
+    C --> D[Push to GHCR\ntag: git commit SHA]
+    D --> E[Deploy: staging]
+    E --> F{Manual approval}
+    F -->|Approved| H[Deploy: production\nsame image, no rebuild]
 ```
 
 All four call into [`fraud-pipeline-lib`](https://github.com/diecocan/fraud-pipeline-lib), a shared Jenkins library holding the build/test/containerize/deploy steps common to this project's Jenkinsfiles and `diecocan-tools`' two — extracted once six near-identical Jenkinsfiles had converged on the same shape (`mavenBuildAndTest`, `nodeBuildAndTest`, `dockerBuildAndPush`, `ensureComposeStackUp`, `deployContainer`, `verifyHttp`/`verifyLogs`, `approvalGate`).
@@ -220,6 +208,22 @@ The four jobs aren't independent at runtime — each downstream component expect
 2. **`fraud-streams-app`** — consumes `transactions-{env}`, creates and produces to `account-profiles-{env}`/`alerts-{env}`.
 3. **`alert-consumer-api`** — consumes `alerts-{env}`, persists to MySQL, serves the REST API + SSE stream the dashboard depends on.
 4. **`dashboard`** — its own deploy health-check curls `alert-consumer-api-{env}` through its nginx reverse proxy, so that container needs to already be running.
+
+```mermaid
+flowchart TB
+    subgraph Staging["Staging environment"]
+        TGS[transaction-generator] -->|transactions-staging| FSS[fraud-streams-app]
+        FSS -->|alerts-staging| ACS[alert-consumer-api]
+        ACS -->|REST + SSE| DBS["dashboard :8096"]
+    end
+    subgraph Prod["Production environment"]
+        TGP[transaction-generator] -->|transactions-prod| FSP[fraud-streams-app]
+        FSP -->|alerts-prod| ACP[alert-consumer-api]
+        ACP -->|REST + SSE| DBP["dashboard :8097"]
+    end
+```
+
+Each environment is a fully separate data flow, never crossing over — same images, same Kafka broker, but isolated topics and consumer groups/application-ids throughout.
 
 Skipping a step doesn't fail loudly — `fraud-streams-app` will just sit unable to reach `RUNNING` within its health-check window if its input topic doesn't exist yet, and the dashboard will simply show no alerts if `alert-consumer-api` isn't running (this exact symptom happened once in practice: `alert-consumer-api` was still pointed at a stale, pre-isolation topic — see the per-environment isolation note above).
 
